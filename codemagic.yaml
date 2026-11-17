@@ -1,0 +1,60 @@
+workflows:
+  bisindo-android-apk:
+    name: BISINDO Android APK
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      node: 20
+      java: 17
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+    scripts:
+      - name: Pasang dependensi (juga menyalin wasm dan mengunduh model MediaPipe)
+        script: |
+          set -e
+          node -v
+          java -version
+          npm install --no-audit --no-fund
+      - name: Build web
+        script: |
+          set -e
+          npm run build
+          test -f dist/models/hand_landmarker.task || { echo "GALAT: model hand_landmarker.task tidak ada di dist/models"; exit 1; }
+          test -d dist/wasm || { echo "GALAT: folder wasm tidak ada di dist/wasm"; exit 1; }
+          ls -la dist
+      - name: Siapkan platform Android (dibuat sekali)
+        script: |
+          set -e
+          if [ ! -d android ]; then npx cap add android; fi
+          npx cap sync android
+      - name: Arahkan Gradle ke Android SDK
+        script: |
+          set -e
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          if [ -n "$SDK" ]; then
+            echo "sdk.dir=$SDK" > android/local.properties
+            cat android/local.properties
+          else
+            echo "ANDROID_SDK_ROOT tidak diset, memakai bawaan Gradle"
+          fi
+      - name: Izin kamera di AndroidManifest
+        script: |
+          set -e
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if ! grep -q 'android.permission.CAMERA' "$MANIFEST"; then
+            perl -0pi -e 's#<application#<uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application#' "$MANIFEST"
+          fi
+          grep -n 'CAMERA' "$MANIFEST"
+      - name: Build APK debug
+        script: |
+          set -e
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+    artifacts:
+      - android/app/build/outputs/apk/debug/*.apk
